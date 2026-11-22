@@ -139,6 +139,22 @@ export class CompositionHelper {
   }
 
   /**
+   * Claims the edit an input event made after a keydown that did not identify its key, so the
+   * caller sends it instead of the textarea diff that keydown scheduled. Returns false while a
+   * composition is active or still being sent, as the composition already includes that text.
+   */
+  public claimInput(): boolean {
+    if (this._isComposing || this._isSendingComposition) {
+      return false;
+    }
+    if (this._textareaChangeTimer) {
+      window.clearTimeout(this._textareaChangeTimer);
+      this._textareaChangeTimer = undefined;
+    }
+    return true;
+  }
+
+  /**
    * Finalizes the composition, resuming regular input actions. This is called when a composition
    * is ending.
    * @param waitForPropagation Whether to wait for events to propagate before sending

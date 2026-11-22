@@ -167,6 +167,61 @@ describe('Terminal', () => {
         assert.equal(term.inputEvent({ data: 'a', inputType: 'insertText', composed: true } as InputEvent), false, modifier.key);
       }
     });
+
+    describe('after a keydown that did not identify its key', () => {
+      // Soft keyboards such as Gboard send keyCode 0 or 229 with key `Unidentified` for every key,
+      // often without a keyup, then the text in a composed input event (#5835, #6259).
+      const unidentifiedKeyDown = (keyCode: number): KeyboardEvent => ({ preventDefault: () => { }, stopPropagation: () => { }, type: 'keydown', keyCode, key: 'Unidentified' } as KeyboardEvent);
+      const insertText = (data: string): InputEvent => ({ data, inputType: 'insertText', composed: true } as InputEvent);
+      const deleteContentBackward = { data: null, inputType: 'deleteContentBackward', composed: true } as InputEvent;
+      let sent: string[];
+
+      beforeEach(() => {
+        sent = [];
+        term.onData(data => sent.push(data));
+        (term as any).textarea = { value: '', focus: () => { } };
+      });
+      it('should take insertText from the input event', () => {
+        for (const keyCode of [0, 229]) {
+          term.keyDown(unidentifiedKeyDown(keyCode));
+          assert.equal(term.inputEvent(insertText('l')), true, `keyCode ${keyCode}`);
+        }
+        assert.deepEqual(sent, ['l', 'l']);
+      });
+      it('should follow a keyboard deleting text it typed and inserting its replacement', () => {
+        // Gboard on iOS converts kana to kanji by deleting the reading and inserting the kanji.
+        for (const data of ['か', 'ん', 'じ']) {
+          term.keyDown(unidentifiedKeyDown(0));
+          term.inputEvent(insertText(data));
+        }
+        for (let i = 0; i < 3; i++) {
+          term.keyDown(unidentifiedKeyDown(0));
+          assert.equal(term.inputEvent(deleteContentBackward), true);
+        }
+        term.keyDown(unidentifiedKeyDown(0));
+        term.inputEvent(insertText('漢字'));
+        assert.equal(sent.join(''), 'かんじ\x7f\x7f\x7f漢字');
+      });
+      it('should dedupe again once a keydown identifies its key', () => {
+        term.keyDown(unidentifiedKeyDown(0));
+        term.keyDown({ preventDefault: () => { }, stopPropagation: () => { }, type: 'keydown', keyCode: 65, key: 'a' } as KeyboardEvent);
+        sent.length = 0;
+        assert.equal(term.inputEvent(insertText('a')), false);
+        term.keyDown(unidentifiedKeyDown(229));
+        term.keyUp({ type: 'keyup', keyCode: 229, key: 'Unidentified' } as KeyboardEvent);
+        term.keyDown({ preventDefault: () => { }, stopPropagation: () => { }, type: 'keydown', keyCode: 8, key: 'Backspace' } as KeyboardEvent);
+        sent.length = 0;
+        assert.equal(term.inputEvent(deleteContentBackward), false);
+        assert.deepEqual(sent, []);
+      });
+      it('should leave the text to a composition that is active or being sent', () => {
+        (term as any)._compositionHelper.claimInput = () => false;
+        term.keyDown(unidentifiedKeyDown(229));
+        assert.equal(term.inputEvent(insertText('。')), false);
+        assert.equal(term.inputEvent(deleteContentBackward), false);
+        assert.deepEqual(sent, []);
+      });
+    });
   });
 
   describe('attachCustomKeyEventHandler', () => {

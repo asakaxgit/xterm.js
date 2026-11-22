@@ -260,4 +260,49 @@ describe('CompositionHelper', () => {
       }, 0);
     });
   });
+
+  describe('claimInput', () => {
+    // The textarea diff is scheduled with window.setTimeout.
+    before(() => {
+      (globalThis as any).window = globalThis;
+    });
+    after(() => {
+      delete (globalThis as any).window;
+    });
+
+    it('Should cancel the textarea diff scheduled by a keyCode 229 keydown', (done) => {
+      textarea.value = 'ab';
+      compositionHelper.keydown({ keyCode: 229 } as KeyboardEvent);
+      textarea.value = 'abc';
+      assert.equal(compositionHelper.claimInput(), true);
+      setTimeout(() => { // wait for the textarea diff
+        assert.equal(handledText, '');
+        done();
+      }, 0);
+    });
+
+    it('Should leave the textarea diff to send when nothing claims the input', (done) => {
+      textarea.value = 'ab';
+      compositionHelper.keydown({ keyCode: 229 } as KeyboardEvent);
+      textarea.value = 'abc';
+      setTimeout(() => { // wait for the textarea diff
+        assert.equal(handledText, 'c');
+        done();
+      }, 0);
+    });
+
+    it('Should refuse while a composition is active or still being sent', (done) => {
+      compositionHelper.compositionstart();
+      assert.equal(compositionHelper.claimInput(), false);
+      compositionHelper.compositionupdate({ data: 'ㅇ' });
+      textarea.value = 'ㅇ';
+      compositionHelper.compositionend();
+      assert.equal(compositionHelper.claimInput(), false);
+      setTimeout(() => { // wait for the composition to be sent
+        assert.equal(handledText, 'ㅇ');
+        assert.equal(compositionHelper.claimInput(), true);
+        done();
+      }, 0);
+    });
+  });
 });

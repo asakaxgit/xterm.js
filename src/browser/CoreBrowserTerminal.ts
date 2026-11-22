@@ -108,6 +108,13 @@ export class CoreBrowserTerminal extends CoreTerminal implements ITerminal {
   private _keyDownSeen: boolean = false;
 
   /**
+   * Records whether the last keydown did not identify its key (keyCode 229 or key `Unidentified`),
+   * as soft keyboards and some IMEs send every key. The input event that follows is then the only
+   * record of what the key typed, so it must not be deduped by the _keyDownSeen gate.
+   */
+  private _keyDownUnidentified: boolean = false;
+
+  /**
    * Records whether the keypress event has already been handled and triggered a data event, if so
    * the input event should not trigger a data event but should still print to the textarea so
    * screen readers will announce it.
@@ -855,6 +862,7 @@ export class CoreBrowserTerminal extends CoreTerminal implements ITerminal {
     // a following composed insertText deduped.
     if (!wasModifierKeyOnlyEvent(event)) {
       this._keyDownSeen = true;
+      this._keyDownUnidentified = event.keyCode === 229 || event.key === 'Unidentified';
     }
 
     if (this._customKeyEventHandler && this._customKeyEventHandler(event) === false) {
@@ -960,6 +968,7 @@ export class CoreBrowserTerminal extends CoreTerminal implements ITerminal {
 
   protected _keyUp(ev: KeyboardEvent): void {
     this._keyDownSeen = false;
+    this._keyDownUnidentified = false;
 
     if (this._customKeyEventHandler && this._customKeyEventHandler(ev) === false) {
       return;
@@ -1037,11 +1046,29 @@ export class CoreBrowserTerminal extends CoreTerminal implements ITerminal {
    * @param ev The input event to be handled.
    */
   protected _inputEvent(ev: InputEvent): boolean {
+    if (this.optionsService.rawOptions.screenReaderMode) {
+      return false;
+    }
+
+    // After a keydown that did not identify its key, the input event is the only record of what
+    // the key did. Soft keyboards such as Gboard send every key this way, and edit text they typed
+    // earlier by deleting it first (iOS kana-to-kanji conversion deletes the reading, then inserts
+    // the kanji). Take the edit from the input event and cancel the textarea diff the keydown
+    // scheduled, so it is sent once and in order (#5835, #5887, #6045, #6259).
+    const fromUnidentifiedKey = this._keyDownUnidentified && !this._keyPressHandled;
+    if (fromUnidentifiedKey && ev.inputType === 'deleteContentBackward' && this._compositionHelper!.claimInput()) {
+      this.coreService.triggerDataEvent(C0.DEL, true);
+      return true;
+    }
+
     // Only support emoji IMEs when screen reader mode is disabled as the event must bubble up to
     // support reading out character input which can doubling up input characters
     // Based on these event traces: https://github.com/xtermjs/xterm.js/issues/3679
-    if (ev.data && ev.inputType === 'insertText' && (!ev.composed || !this._keyDownSeen) && !this.optionsService.rawOptions.screenReaderMode) {
+    if (ev.data && ev.inputType === 'insertText' && (!ev.composed || !this._keyDownSeen || fromUnidentifiedKey)) {
       if (this._keyPressHandled) {
+        return false;
+      }
+      if (fromUnidentifiedKey && !this._compositionHelper!.claimInput()) {
         return false;
       }
 
